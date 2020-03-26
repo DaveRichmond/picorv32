@@ -94,6 +94,57 @@ icebreaker_fw.hex: icebreaker_fw.elf
 icebreaker_fw.bin: icebreaker_fw.elf
 	$(CROSS)objcopy -O binary icebreaker_fw.elf icebreaker_fw.bin
 
+# ---- Spartan 6 Test Board ----
+xc6s_sim: xc6s_tb.vvp xc6s_fw.hex
+	vvp -N $< +firmware=xc6s_fw.hex
+
+xc6s_synsim: xc6s_syn_tb.vvp xc6s_fw.hex
+	vvp -N $< +firmware=xc6s_fw.hex
+
+xc6s.edif: xc6s.v spimemio.v simpleuart.v picosoc.v ../picorv32.v
+	yosys -ql xc6s.log -p 'synth_xilinx -family xc6s -ise -top xc6s_demo; write_edif -pvector bra xc6s.edif' $^
+xc6s.json: xc6s.v spimemio.v simpleuart.v picosoc.v ../picorv32.v
+	yosys -ql xc6s.log -p 'synth_xilinx -family xc6s -ise -top xc6s_demo; write_json xc6s.json' $^
+
+XILINX_ISE ?= ${XILINX}/bin/lin64
+xc6s.bit: xc6s.edif xc6s.ucf
+	"${XILINX_ISE}/ngdbuild" -uc "xc6s.ucf" -p "xc6slx9-tqg144-2" "xc6s.edif" "xc6s.ngd"
+	"${XILINX_ISE}/map" -p "xc6slx9-tqg144-2" -w -mt 2 -o "xc6s_map.ncd" "xc6s.ngd"
+	"${XILINX_ISE}/par" -w -mt 4 "xc6s_map.ncd" "xc6s.ncd"
+
+	# Timing report and bitstream generation
+	"${XILINX_ISE}/trce" -v -n -fastpaths "xc6s.ncd" -o "xc6s.twr" "xc6s_map.pcf"
+	"${XILINX_ISE}/bitgen" -w -g Binary:Yes -g Compress -g UnusedPin:PullNone "xc6s.ncd"
+	# cleanup "junk"
+	rm -Rf xlnx_auto_0_xdb _xmsgs netlist.lst par_usage_statistics.html \
+		usage_statistics_webtalk.html xc6s_map.* xc6s.bgn \
+		xc6s_bitgen.* xc6s.bld  xc6s*.xrpt xc6s_map.* xc6s_pad.* \
+		xc6s.drc xc6s.ncd xc6s.ngd xc6s.ngo xc6s.pad xc6s.par \
+		xc6s.ptwx xc6s.twr xc6s.twx xc6s.unroutes xc6s.xpi xc6s_*.xml \
+		webtalk.log
+
+xc6s_tb.vvp: xc6s_tb.v xc6s.v spimemio.v simpleuart.v picosoc.v ../picorv32.v spiflash.v
+	iverilog -s testbench -o $@ $^ `yosys-config --datdir/xilinx/cells_sim.v` `yosys-config --datdir/xilinx/cells_xtra.v`
+
+xc6s_syn_tb.vvp: xc6s_tb.v xc6s_syn.v spiflash.v
+	iverilog -s testbench -o $@ $^ `yosys-config --datdir/xilinx/cells_sim.v` `yosys-config --datdir/xilinx/cells_xtra.v`
+
+xc6s_syn.v: xc6s.json
+	yosys -p 'read_json xc6s.json; write_verilog xc6s_syn.v'
+
+xc6s_sections.lds: sections.lds
+	$(CROSS)cpp -P -DXC6S -o $@ $^
+
+xc6s_fw.elf: xc6s_sections.lds start.s firmware.c
+	$(CROSS)gcc $(CFLAGS) -DXC6S -march=rv32imc -Wl,-Bstatic,-T,xc6s_sections.lds,--strip-debug -ffreestanding -nostdlib -o xc6s_fw.elf start.s firmware.c
+
+xc6s_fw.hex: xc6s_fw.elf
+	$(CROSS)objcopy -O verilog xc6s_fw.elf xc6s_fw.hex
+
+xc6s_fw.bin: xc6s_fw.elf
+	$(CROSS)objcopy -O binary xc6s_fw.elf xc6s_fw.bin
+
+
 # ---- Testbench for SPI Flash Model ----
 
 spiflash_tb: spiflash_tb.vvp firmware.hex
@@ -117,6 +168,7 @@ clean:
 	rm -f hx8kdemo_syn.v hx8kdemo_syn_tb.vvp hx8kdemo_tb.vvp
 	rm -f icebreaker.json icebreaker.log icebreaker.asc icebreaker.rpt icebreaker.bin
 	rm -f icebreaker_syn.v icebreaker_syn_tb.vvp icebreaker_tb.vvp
+	rm -f xc6s.log xc6s.edif xc6s.bin xc6s.bit xc6s.json
 
 .PHONY: spiflash_tb clean
 .PHONY: hx8kprog hx8kprog_fw hx8ksim hx8ksynsim
